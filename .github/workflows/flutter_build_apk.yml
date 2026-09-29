@@ -1,11 +1,6 @@
 name: Build APK
 
 on:
-  push:
-    branches:
-      - main
-      - master
-
   workflow_dispatch:
     inputs:
       zip_url:
@@ -26,13 +21,59 @@ on:
         options:
           - release
           - debug
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download source ZIP
+        env:
+          ZIP_URL: ${{ inputs.zip_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          if [ -z "$ZIP_URL" ]; then
+            echo "zip_url kosong"
+            exit 1
+          fi
+
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/octet-stream" \
+            "$ZIP_URL" \
+            -o "$RUNNER_TEMP/source.zip"
+
+          rm -rf "$RUNNER_TEMP/source"
+          mkdir -p "$RUNNER_TEMP/source"
+
+          unzip -q "$RUNNER_TEMP/source.zip" \
+            -d "$RUNNER_TEMP/source"
+
+          PROJECT_DIR="$(
+            find "$RUNNER_TEMP/source" \
+              -name pubspec.yaml \
+              -type f \
+              -print \
+              -quit \
+            | xargs -r dirname
+          )"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "pubspec.yaml tidak ditemukan di dalam ZIP"
+            find "$RUNNER_TEMP/source" -maxdepth 3 -type f
+            exit 1
+          fi
+
+          echo "Project Flutter ditemukan di: $PROJECT_DIR"
+
+          cp -a "$PROJECT_DIR"/. "$GITHUB_WORKSPACE"/
+
+          test -f "$GITHUB_WORKSPACE/pubspec.yaml"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -47,14 +88,19 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Pub get
+      - name: Install dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: |
+          if [ "${{ inputs.build_type }}" = "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: app-${{ inputs.build_type }}
+          path: build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
