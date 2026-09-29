@@ -1,17 +1,65 @@
 name: Build APK
 
 on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:  # tombol "Run workflow" manual di Actions
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: "URL ZIP source project"
+        required: true
+        type: string
+      tag:
+        description: "Release tag"
+        required: true
+        type: string
+      build_type:
+        description: "Build type"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
+
+      - name: Download source ZIP
+        env:
+          ZIP_URL: ${{ inputs.zip_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          test -n "$ZIP_URL" || { echo "zip_url kosong"; exit 1; }
+
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/octet-stream" \
+            "$ZIP_URL" \
+            --output "$RUNNER_TEMP/source.zip"
+
+          rm -rf "$RUNNER_TEMP/source"
+          mkdir -p "$RUNNER_TEMP/source"
+          unzip -q "$RUNNER_TEMP/source.zip" -d "$RUNNER_TEMP/source"
+
+          PROJECT_DIR="$(find "$RUNNER_TEMP/source" -name pubspec.yaml -type f -print -quit | xargs -r dirname)"
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "pubspec.yaml tidak ditemukan di dalam ZIP"
+            find "$RUNNER_TEMP/source" -maxdepth 3 -type f -print | head -100
+            exit 1
+          fi
+
+          echo "Project Flutter: $PROJECT_DIR"
+          cp -a "$PROJECT_DIR"/. "$GITHUB_WORKSPACE"/
+          test -f "$GITHUB_WORKSPACE/pubspec.yaml"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -22,18 +70,27 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.24.0"   # sesuaikan versi Flutter kamu
+          flutter-version: "3.24.0"
           channel: stable
           cache: true
 
-      - name: Pub get
+      - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK (release)
-        run: flutter build apk --release
+      - name: Build APK
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
+        run: |
+          set -euo pipefail
+          if [ "$BUILD_TYPE" = "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: app-${{ inputs.build_type }}
+          path: build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
+          if-no-files-found: error
