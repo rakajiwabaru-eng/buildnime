@@ -7,27 +7,28 @@ on:
         description: "URL ZIP source project"
         required: true
         type: string
-
       tag:
         description: "Release tag"
         required: true
         type: string
-
       build_type:
         description: "Build type"
         required: true
-        default: release
+        default: "release"
         type: choice
         options:
           - release
           - debug
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
 
       - name: Download source ZIP
@@ -35,44 +36,29 @@ jobs:
           ZIP_URL: ${{ inputs.zip_url }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
+          set -euo pipefail
 
-          if [ -z "$ZIP_URL" ]; then
-            echo "zip_url kosong"
-            exit 1
-          fi
+          test -n "$ZIP_URL" || { echo "zip_url kosong"; exit 1; }
 
-          curl -fL \
+          curl --fail --location --silent --show-error \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/octet-stream" \
             "$ZIP_URL" \
-            -o "$RUNNER_TEMP/source.zip"
+            --output "$RUNNER_TEMP/source.zip"
 
           rm -rf "$RUNNER_TEMP/source"
           mkdir -p "$RUNNER_TEMP/source"
+          unzip -q "$RUNNER_TEMP/source.zip" -d "$RUNNER_TEMP/source"
 
-          unzip -q "$RUNNER_TEMP/source.zip" \
-            -d "$RUNNER_TEMP/source"
-
-          PROJECT_DIR="$(
-            find "$RUNNER_TEMP/source" \
-              -name pubspec.yaml \
-              -type f \
-              -print \
-              -quit \
-            | xargs -r dirname
-          )"
-
+          PROJECT_DIR="$(find "$RUNNER_TEMP/source" -name pubspec.yaml -type f -print -quit | xargs -r dirname)"
           if [ -z "$PROJECT_DIR" ]; then
             echo "pubspec.yaml tidak ditemukan di dalam ZIP"
-            find "$RUNNER_TEMP/source" -maxdepth 3 -type f
+            find "$RUNNER_TEMP/source" -maxdepth 3 -type f -print | head -100
             exit 1
           fi
 
-          echo "Project Flutter ditemukan di: $PROJECT_DIR"
-
+          echo "Project Flutter: $PROJECT_DIR"
           cp -a "$PROJECT_DIR"/. "$GITHUB_WORKSPACE"/
-
           test -f "$GITHUB_WORKSPACE/pubspec.yaml"
 
       - name: Setup Java
@@ -92,8 +78,11 @@ jobs:
         run: flutter pub get
 
       - name: Build APK
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
         run: |
-          if [ "${{ inputs.build_type }}" = "debug" ]; then
+          set -euo pipefail
+          if [ "$BUILD_TYPE" = "debug" ]; then
             flutter build apk --debug
           else
             flutter build apk --release
@@ -104,3 +93,4 @@ jobs:
         with:
           name: app-${{ inputs.build_type }}
           path: build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
+          if-no-files-found: error
