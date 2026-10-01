@@ -25,11 +25,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout workflow repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download source ZIP
         env:
@@ -46,23 +46,35 @@ jobs:
             "$ZIP_URL" \
             --output "$RUNNER_TEMP/source.zip"
 
+          echo "ZIP size: $(wc -c < "$RUNNER_TEMP/source.zip") bytes"
+
           rm -rf "$RUNNER_TEMP/source"
           mkdir -p "$RUNNER_TEMP/source"
           unzip -q "$RUNNER_TEMP/source.zip" -d "$RUNNER_TEMP/source"
 
-          PROJECT_DIR="$(find "$RUNNER_TEMP/source" -name pubspec.yaml -type f -print -quit | xargs -r dirname)"
+          # Cari folder yang punya pubspec.yaml + lib/main.dart
+          PROJECT_DIR=""
+          while IFS= read -r pub; do
+            dir="$(dirname "$pub")"
+            if [ -f "$dir/lib/main.dart" ]; then
+              PROJECT_DIR="$dir"
+              break
+            fi
+          done < <(find "$RUNNER_TEMP/source" -name pubspec.yaml -type f)
+
           if [ -z "$PROJECT_DIR" ]; then
-            echo "pubspec.yaml tidak ditemukan di dalam ZIP"
-            find "$RUNNER_TEMP/source" -maxdepth 3 -type f -print | head -100
+            echo "Project Flutter tidak lengkap (butuh pubspec.yaml + lib/main.dart)"
+            find "$RUNNER_TEMP/source" -maxdepth 4 -type f | head -80
             exit 1
           fi
 
           echo "Project Flutter: $PROJECT_DIR"
           cp -a "$PROJECT_DIR"/. "$GITHUB_WORKSPACE"/
           test -f "$GITHUB_WORKSPACE/pubspec.yaml"
+          test -f "$GITHUB_WORKSPACE/lib/main.dart"
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
